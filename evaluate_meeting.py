@@ -106,8 +106,9 @@ def evaluate_models(dialogues):
     first_timestamp = get_first_timestamp(dialogues)
 
     ollama_models = {
-        "qwen3:8b": ChatOllama(model="qwen3:8b", temperature=0.8),
-        "llama3.2:1b": ChatOllama(model="llama3.2:1b", temperature=0.8),
+        "llama2:latest": ChatOllama(model="llama2:latest", temperature=0.8),
+        "llama3:8b": ChatOllama(model="llama3:8b", temperature=0.8),
+        "mistral:latest": ChatOllama(model="mistral:latest", temperature=0.8),
     }
 
     def generate_summary(model, transcript, first_timestamp):
