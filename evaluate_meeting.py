@@ -1,47 +1,110 @@
 import json
 from langchain_ollama import ChatOllama
-from deepeval.metrics import ContextualPrecisionMetric, ContextualRecallMetric, ContextualRelevancyMetric
+from deepeval.metrics import (
+    ContextualPrecisionMetric,
+    ContextualRecallMetric,
+    ContextualRelevancyMetric,
+)
 from deepeval.test_case import LLMTestCase
 from deepeval import evaluate
 from deepeval.models.base_model import DeepEvalBaseLLM
 import litellm
 import time
 import os
+from pydantic import BaseModel
+import instructor
+from typing import Any, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Set the Gemini API key as environment variable (best practice)
+
+
 
 class CustomGeminiLLM(DeepEvalBaseLLM):
+    """Custom LLM implementation for Gemini with structured output support using instructor."""
+
     def __init__(self):
-        self.model = litellm.completion
+        # Create instructor client for structured responses
+        from instructor import from_litellm
+        from litellm import completion
+
+        self.client = from_litellm(completion)
+        self.raw_model = completion
 
     def load_model(self):
-        return self.model
+        return self.client
 
-    def generate(self, prompt: str) -> str:
-        response = self.model(
-            model="gemini-2.0-flash",  
-            messages=[{"role": "user", "content": prompt}],
-            api_key="AIzaSyBLPqdI2JSWLidxSRMtlRmrQUKFqWZXXYc"  
-        )
-        return response['choices'][0]['message']['content']
+    def generate(self, prompt: str, schema: BaseModel = None, **kwargs) -> str:
+        """Generate response with optional Pydantic schema validation."""
+        try:
+            if schema is not None:
+                # Use instructor client for structured output
+                response = self.client.chat.completions.create(
+                    model="gemini/gemini-2.0-flash",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_model=schema,
+                    **kwargs,
+                )
+                # Return the Pydantic model instance
+                return response
+            else:
+                # Regular text generation using raw litellm
+                response = self.raw_model(
+                    model="gemini/gemini-2.0-flash",
+                    messages=[{"role": "user", "content": prompt}],
+                    **kwargs,
+                )
+                content = response.choices[0].message.content
+                # Clean up content for better JSON parsing
+                if isinstance(content, str):
+                    content = content.replace("\n", " ").replace("\r", " ")
+                    # Try to clean up problematic escape sequences
+                    content = content.replace("\\", "/")
+                return content
+        except Exception as e:
+            print(f"Error in generate: {e}")
+            if schema is not None:
+                # Return a minimal valid response for the schema
+                try:
+                    return schema()
+                except:
+                    # If schema can't be instantiated, create a fallback
+                    return (
+                        schema(error="Failed to generate structured response")
+                        if hasattr(schema, "error")
+                        else schema()
+                    )
+            else:
+                return '{"error": "Failed to generate response"}'
+
+    async def a_generate(self, prompt: str, schema: BaseModel = None, **kwargs) -> str:
+        """Async version of generate with schema support."""
+        return self.generate(prompt, schema, **kwargs)
 
     def get_model_name(self):
         return "Custom Gemini LLM"
 
-    async def a_generate(self, prompt: str) -> str:
-        return self.generate(prompt)  
 
 with open("processed_meetings.json", "r", encoding="utf-8") as f:
     processed_meetings = json.load(f)
 
+
 def create_transcript(dialogues):
-    return "\n".join([f"{d['speaker']} ({d['timestamp']}): {d['content']}" for d in dialogues])
+    return "\n".join(
+        [f"{d['speaker']} ({d['timestamp']}): {d['content']}" for d in dialogues]
+    )
+
 
 def get_first_timestamp(dialogues):
     return dialogues[0]["timestamp"] if dialogues else "Không xác định"
 
+
 def evaluate_models(dialogues):
     transcript = create_transcript(dialogues)
     first_timestamp = get_first_timestamp(dialogues)
-    
+
     ollama_models = {
         "llama2:latest": ChatOllama(model="llama2:latest", temperature=0.8),
         "llama3:8b": ChatOllama(model="llama3:8b", temperature=0.8),
@@ -61,10 +124,11 @@ def evaluate_models(dialogues):
         results[model_name] = {"summary": summary, "duration": duration}
     return results
 
+
 def evaluate_with_ground_truth(dialogues, model_results):
     transcript = create_transcript(dialogues)
     first_timestamp = get_first_timestamp(dialogues)
-    
+
     custom_llm = CustomGeminiLLM()
 
     def generate_ground_truth(transcript, first_timestamp):
@@ -82,7 +146,7 @@ def evaluate_with_ground_truth(dialogues, model_results):
             input=transcript,
             actual_output=result["summary"],
             expected_output=ground_truth,
-            retrieval_context=[transcript]  # Cung cấp ngữ cảnh cho metric contextual
+            retrieval_context=[transcript],  # Cung cấp ngữ cảnh cho metric contextual
         )
         test_cases.append(test_case)
 
@@ -90,30 +154,59 @@ def evaluate_with_ground_truth(dialogues, model_results):
     metrics = [
         ContextualPrecisionMetric(model=custom_llm, threshold=0.5),
         ContextualRecallMetric(model=custom_llm, threshold=0.5),
-        ContextualRelevancyMetric(model=custom_llm, threshold=0.5)
+        ContextualRelevancyMetric(model=custom_llm, threshold=0.5),
     ]
-    result = evaluate(
-        test_cases=test_cases,
-        metrics=metrics,
-        print_results=True
-    )
+    result = evaluate(test_cases=test_cases, metrics=metrics)
 
     evaluations = {}
-    for i, (model_name, result) in enumerate(model_results.items()):
+    for i, (model_name, model_result) in enumerate(model_results.items()):
+        # Truy cập metrics từ test_case sau khi evaluate
+        test_case = test_cases[i]
+
+        # Chạy metrics trực tiếp trên test case để lấy scores với error handling
         evaluations[model_name] = {
-            "precision": test_cases[i].metrics[0].score,
-            "recall": test_cases[i].metrics[1].score,
-            "relevancy": test_cases[i].metrics[2].score,
-            "duration": result["duration"]
+            "precision": 0.0,
+            "recall": 0.0,
+            "relevancy": 0.0,
+            "duration": model_result["duration"],
         }
 
+        try:
+            precision_metric = ContextualPrecisionMetric(
+                model=custom_llm, threshold=0.5
+            )
+            precision_metric.measure(test_case)
+            evaluations[model_name]["precision"] = precision_metric.score
+            print(f"✓ Precision metric completed for {model_name}")
+        except Exception as e:
+            print(f"✗ Error measuring precision for {model_name}: {e}")
+
+        try:
+            recall_metric = ContextualRecallMetric(model=custom_llm, threshold=0.5)
+            recall_metric.measure(test_case)
+            evaluations[model_name]["recall"] = recall_metric.score
+            print(f"✓ Recall metric completed for {model_name}")
+        except Exception as e:
+            print(f"✗ Error measuring recall for {model_name}: {e}")
+
+        try:
+            relevancy_metric = ContextualRelevancyMetric(
+                model=custom_llm, threshold=0.5
+            )
+            relevancy_metric.measure(test_case)
+            evaluations[model_name]["relevancy"] = relevancy_metric.score
+            print(f"✓ Relevancy metric completed for {model_name}")
+        except Exception as e:
+            print(f"✗ Error measuring relevancy for {model_name}: {e}")
+
     return ground_truth, evaluations
+
 
 def main():
     if not processed_meetings:
         print("Không có dữ liệu để xử lý.")
         return
-    
+
     first_meeting = processed_meetings[0]
     dialogues = first_meeting["dialogue"]
 
@@ -133,6 +226,7 @@ def main():
         print(f"Contextual Precision: {eval['precision']:.2f}")
         print(f"Contextual Recall: {eval['recall']:.2f}")
         print(f"Contextual Relevancy: {eval['relevancy']:.2f}\n")
+
 
 if __name__ == "__main__":
     # Tạo file .deepeval nếu chưa tồn tại
