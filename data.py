@@ -114,8 +114,8 @@ class MeetingProcessor:
 
 
 def main():
-    input_csv = "sql.csv"  # Đường dẫn file input
-    output_json = "processed_meetings.json"  # Đường dẫn file output
+    input_csv = "dsp/sql.csv"  # Đường dẫn file input
+    output_json = "dsp/processed_meetings.json"  # Đường dẫn file output
 
     df = pd.read_csv(input_csv, sep=";")
     processor = MeetingProcessor()
