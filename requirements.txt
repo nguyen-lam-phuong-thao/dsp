@@ -1,3 +1,5 @@
 langchain-ollama
 deepeval
 litellm
+transformers
+tiktoken
