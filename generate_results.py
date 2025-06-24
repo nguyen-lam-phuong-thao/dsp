@@ -133,7 +133,7 @@ def main():
     }
 
     # Sample and process dialogues
-    num_samples = min(200, len(processed_meetings))
+    num_samples = min(100, len(processed_meetings))
     print(f"Sẽ xử lý {num_samples} hội thoại ngẫu nhiên từ tập dữ liệu.")
     sampled_meetings = random.sample(processed_meetings, num_samples)
     
@@ -159,6 +159,7 @@ def main():
             # Generate ground truth with Gemini
             print("Generating ground truth with Gemini...")
             ground_truth_result = generate_ground_truth(gemini_llm, transcript, first_timestamp)
+            time.sleep(60)  # Wait 60 seconds to avoid Gemini rate limit
             
             # Generate summaries with Ollama models
             model_summaries = {}
